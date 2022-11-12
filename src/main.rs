@@ -16,6 +16,24 @@ const NEIGHBOR_LIMIT: u8 = 3;
 type CellArray = [[(u8, u8); WIDTH]; HEIGHT];
 
 fn main() {
+    /// some thoughts...
+    /// if this was about performance, we could do as follows:
+    /// - only use 1/0 for alive/dead (no colors, grays...)
+    /// - detect the system's bit size/usize, e.g. 32, 64
+    /// - instead of using 1 array index per cell, pack usize cells into one usized value,
+    ///   e.g. on 64-Bit systems, use 1 u64 to store 64 cells, thus 640px -> 10 x u64
+    /// - avoid memory copies of the array, by providing a second one pre-filled, mutable. then
+    ///   switch between those arrays
+    /// - split the work onto num_cores threads. this works, as the whole field will be evaluated
+    ///   at once. creates some synchronization overhead, though. could evt. overcome this by
+    ///   splitting the rows (y) into num_cores chunks and concatenating it for rendering.
+    ///   or we could subdivide the playfield(screen) into quads, which makes wrapping more difficult
+    /// - write tests \o/ to figure out the smartest and best algorithm
+    /// - order if-else statements by amount of instructions, e.g. == vs > x-1.
+    ///   or use bitmasks... and make neighbor_limit +/- as const
+    /// - inline functions
+    /// - avoid if-statements and math if possible -> use bit fields, xor, or, etc.
+
     let mut cells = [[(0, 0); WIDTH]; HEIGHT];
     let mut generation = 0;
 
@@ -67,7 +85,7 @@ fn main() {
         // Update internal state and request a redraw
         cells = tick(cells, WIDTH as usize, HEIGHT as usize, generation);
         generation = generation + 1;
-        // thread::sleep(Duration::from_millis(10));
+        // thread::sleep(Duration::from_millis(100));
     })
 }
 
@@ -84,7 +102,7 @@ fn seed(mut cells: CellArray, width:usize, height:usize) -> CellArray {
 
     for y in 0..height {
         for x in 0..width {
-            cells[y][x] = if rand::random::<f32>() > 0.01 { (1, 0xff) } else { (0, 0) };
+            cells[y][x] = if rand::random::<f32>() > 0.5 { (1, 0xff) } else { (0, 0) };
         }
     }
 
@@ -96,6 +114,8 @@ fn tick(mut cells: CellArray, width: usize, height: usize, generation: usize) ->
 }
 
 fn calculate_state(mut cells: CellArray, width: usize, height: usize, generation: usize) -> CellArray {
+    let mut cells_original:CellArray = [[(0, 0); WIDTH]; HEIGHT];
+    cells_original.clone_from_slice(&cells);
     let mut has_changes = false;
     let wrap = |index: usize, amount: i16, limit: usize| if (index as i16 + amount) < 0 { limit as i16 + amount } else if index as i16 + amount >= limit as i16 { 0i16 + amount } else { index as i16 + amount } as usize;
     for y in 0..height {
@@ -104,28 +124,30 @@ fn calculate_state(mut cells: CellArray, width: usize, height: usize, generation
             let x_wrapped_right = wrap(x, 1, width);
             let y_wrapped_top = wrap(y, -1, height);
             let y_wrapped_bottom = wrap(y, 1, height);
-            let top_left = cells[y_wrapped_top][x_wrapped_left].0;
-            let top_mid = cells[y_wrapped_top][x].0;
-            let top_right = cells[y_wrapped_top][x_wrapped_right].0;
-            let mid_left = cells[y][x_wrapped_left].0;
-            let mid_right = cells[y][x_wrapped_right].0;
-            let bottom_left = cells[y_wrapped_bottom][x_wrapped_left].0;
-            let bottom_mid = cells[y_wrapped_bottom][x].0;
-            let bottom_right = cells[y_wrapped_bottom][x_wrapped_right].0;
+            let top_left = cells_original[y_wrapped_top][x_wrapped_left].0;
+            let top_mid = cells_original[y_wrapped_top][x].0;
+            let top_right = cells_original[y_wrapped_top][x_wrapped_right].0;
+            let mid_left = cells_original[y][x_wrapped_left].0;
+            let mid_right = cells_original[y][x_wrapped_right].0;
+            let bottom_left = cells_original[y_wrapped_bottom][x_wrapped_left].0;
+            let bottom_mid = cells_original[y_wrapped_bottom][x].0;
+            let bottom_right = cells_original[y_wrapped_bottom][x_wrapped_right].0;
             let alive_neighbors = top_left + top_mid + top_right + mid_left + mid_right + bottom_left + bottom_mid + bottom_right;
             if cells[y][x].0 == 1 {
                 if alive_neighbors < NEIGHBOR_LIMIT - 1 {
                     // underpopulation
                     cells[y][x].0 = 0;
-                    cells[y][x].1 = (cells[y][x].1 as f32 * 0.5) as u8;
+                    cells[y][x].1 = (cells_original[y][x].1 as f32 * 0.95) as u8;
                     has_changes = true;
                 } else if alive_neighbors < NEIGHBOR_LIMIT + 1 {
                     // balanced/living
                     // no change
+                    // cells[y][x].0 = cells_original[y][x].0;
+                    cells[y][x].1 = 0xff;
                 } else if alive_neighbors > NEIGHBOR_LIMIT {
                     // overpopulation
                     cells[y][x].0 = 0;
-                    cells[y][x].1 = (cells[y][x].1 as f32 * 0.5) as u8;
+                    cells[y][x].1 = (cells_original[y][x].1 as f32 * 0.95) as u8;
                     has_changes = true;
                 }
             } else if alive_neighbors == NEIGHBOR_LIMIT {
@@ -134,7 +156,8 @@ fn calculate_state(mut cells: CellArray, width: usize, height: usize, generation
                 cells[y][x].1 = 0xff;
                 has_changes = true;
             } else {
-                cells[y][x].1 = (cells[y][x].1 as f32 * 0.5) as u8;
+                cells[y][x].0 = cells_original[y][x].0;
+                cells[y][x].1 = (cells_original[y][x].1 as f32 * 0.95) as u8;
             }
         }
     }
